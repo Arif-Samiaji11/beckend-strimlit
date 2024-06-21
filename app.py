@@ -6,23 +6,37 @@ import pandas as pd
 from pymongo import MongoClient
 from datetime import datetime
 
+# Fungsi untuk menghitung kendaraan masuk dan keluar berdasarkan lintasan mereka
+
+
+def update_vehicle_count(tracks, region_of_interest, counts, model):
+    for track in tracks:
+        for box in track.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            class_index = int(box.cls[0])
+            class_name = model.names[class_index]
+
+            # Periksa apakah titik tengah berada dalam ROI
+            if region_of_interest[0][1] < center_y < region_of_interest[1][1]:
+                if class_name in counts:
+                    counts[class_name]['in'] += 1
+
 # Fungsi untuk menyimpan hasil deteksi ke MongoDB
 
 
-def save_to_mongodb(predictions, collection, model, frame_count):
-    for prediction in predictions:
-        for box in prediction.boxes:
-            class_index = int(box.cls[0])
-            class_name = model.names[class_index]
-            timestamp = datetime.now()
-            document = {
-                "frame_number": frame_count,
-                "jenis_kendaraan": class_name,
-                "deteksi": 1,  # Setiap entri dihitung sebagai satu deteksi
-                "date": timestamp.strftime('%Y-%m-%d'),
-                "hari": timestamp.strftime('%A')
-            }
-            collection.insert_one(document)
+def save_to_mongodb(counts, collection):
+    timestamp = datetime.now()
+    for class_name, count in counts.items():
+        document = {
+            "jenis_kendaraan": class_name,
+            "masuk": count['in'],
+            "keluar": count['out'],
+            "date": timestamp.strftime('%Y-%m-%d'),
+            "hari": timestamp.strftime('%A')
+        }
+        collection.insert_one(document)
 
 # Fungsi untuk mengambil data dari MongoDB dan menyimpannya ke CSV
 
@@ -38,7 +52,8 @@ def export_to_csv(collection):
         df = pd.DataFrame(data)
 
         # Check if necessary columns are in dataframe
-        required_columns = {'jenis_kendaraan', 'date', 'deteksi', 'hari'}
+        required_columns = {'jenis_kendaraan',
+                            'date', 'masuk', 'keluar', 'hari'}
         if not required_columns.issubset(df.columns):
             print(
                 f"Required columns are missing from data: {required_columns - set(df.columns)}")
@@ -48,27 +63,15 @@ def export_to_csv(collection):
         print(f"Error reading from MongoDB: {e}")
         return
 
-    # Filter data untuk kendaraan jenis car dan truck
-    car_truck_data = df[df['jenis_kendaraan'].isin(['car', 'truck'])]
-
-    # Hitung jumlah deteksi per hari
-    car_truck_counts = car_truck_data.groupby(
-        'date')['deteksi'].sum().reset_index()
-    car_truck_counts['jenis_kendaraan'] = 'car & truck'
-
-    # Tambahkan kolom hari
-    car_truck_counts['hari'] = car_truck_counts['date'].apply(
-        lambda x: datetime.strptime(x, '%Y-%m-%d').strftime('%A'))
-
     # Simpan hasil ke CSV
     csv_file = 'hasil_deteksi_kendaraan.csv'
-    car_truck_counts.to_csv(csv_file, index=False)
+    df.to_csv(csv_file, index=False)
     print(f"Data has been exported to {csv_file}")
 
 
 # Inisialisasi koneksi MongoDB
 client = MongoClient('mongodb://localhost:27017/')
-db = client['percobaan_data']
+db = client['db_jenis_kendaraan']
 collection = db['hasil_deteksi']
 
 # Inisialisasi model YOLO
@@ -105,7 +108,8 @@ counter = object_counter.ObjectCounter()
 counter.set_args(view_img=True, reg_pts=region_of_interest,
                  classes_names=model.names, draw_tracks=True)
 
-frame_count = 0
+# Dictionary untuk menyimpan jumlah deteksi per label
+counts = {'car': {'in': 0, 'out': 0}, 'truck': {'in': 0, 'out': 0}}
 
 # Proses setiap frame
 while cap.isOpened():
@@ -113,17 +117,19 @@ while cap.isOpened():
     if not success:
         print("Video frame is empty or video processing has been successfully completed.")
         break
-    tracks = model.track(im0, persist=True, show=False)
-    im0 = counter.start_counting(im0, tracks)
+    results = model.track(im0, persist=True, show=False)
+    im0 = counter.start_counting(im0, results)
     video_writer.write(im0)
-    frame_count += 1
 
-    # Simpan data ke MongoDB
-    save_to_mongodb(tracks, collection, model, frame_count)
+    # Update jumlah kendaraan yang masuk dan keluar
+    update_vehicle_count(results, region_of_interest, counts, model)
 
 cap.release()
 video_writer.release()
 cv2.destroyAllWindows()
+
+# Simpan data ke MongoDB setelah selesai memproses video
+save_to_mongodb(counts, collection)
 
 # Ekspor data ke CSV
 export_to_csv(collection)

@@ -3,7 +3,6 @@ from pymongo import MongoClient
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
-from path import Path
 
 # Fungsi untuk mengubah halaman menjadi tampilan yang lebih menarik
 
@@ -41,8 +40,8 @@ def set_page_layout():
 
 
 def draw_charts(df):
-    car = df[df['jenis_kendaraan'] == 'car'].shape[0]
-    truck = df[df['jenis_kendaraan'] == 'truck'].shape[0]
+    car = df[df['jenis_kendaraan'] == 'car']['masuk'].sum()
+    truck = df[df['jenis_kendaraan'] == 'truck']['masuk'].sum()
     total = car + truck
 
     labels = ['Car', 'Truck']
@@ -115,7 +114,7 @@ def show_history(history_df):
 
 def load_data_from_mongodb():
     client = MongoClient("mongodb://localhost:27017/")
-    db = client["percobaan_data"]
+    db = client["db_jenis_kendaraan"]
     collection = db["hasil_deteksi"]
     data = list(collection.find())
     for document in data:
